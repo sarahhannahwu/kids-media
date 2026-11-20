@@ -214,5 +214,7 @@ plot_diverging_likert_median <- function(df, item_cols, item_labels = item_cols,
 
 p <- plot_diverging_likert_median(df, item_cols, item_labels)
 p
+
+
 ```
 
