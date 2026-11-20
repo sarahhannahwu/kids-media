@@ -1,0 +1,218 @@
+---
+title: "Exploratory Survey (SONA)"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 
+```{r}
+library(tidyverse)
+library(dplyr)
+library(jtools)
+library(qualtRics)
+library(rstatix)
+```
+
+## Import Data
+
+```{r}
+qualtrics_api_credentials(
+  api_key = "qKDWMNueoKPpjro1Dln0rjrlNfE7Dk0pw0S9OCZR",
+  base_url = "stanforduniversity.pdx1.qualtrics.com", 
+  install = TRUE,
+  overwrite = TRUE
+)
+
+# Force R to reload the new credentials
+readRenviron("~/.Renviron")
+
+kids_media_data <- fetch_survey(surveyID = "SV_81YtHzVK0gqgppk",
+                              label = FALSE,
+                              convert = FALSE)
+```
+
+```{r}
+completed <- kids_media_data |> 
+  filter(Progress == 100) |> 
+# Handle duplicates
+  distinct(id, .keep_all = TRUE)
+
+write_csv(completed, "data/completed.csv")
+```
+
+## Participants
+```{r}
+completed |> 
+  group_by(parent_yn) |> 
+  count()
+
+completed |> 
+  group_by(gender) |> 
+  count()
+
+completed |> 
+  group_by(parent_yn) |> 
+  get_summary_stats(age, type = "mean_sd")
+  
+```
+
+## Channels 
+```{r}
+# For each channel, create a histogram of Likert responses
+
+plot_likert_histograms <- function(df, channel_cols, channel_labels = channel_cols,
+                                   scale_values = 1:5,
+                                   scale_labels = c("Never", "Rarely", "Sometimes",
+                                                    "Often", "Always"),
+                                   ncols = 3, normalize = TRUE) {
+
+  stopifnot(length(channel_cols) == length(channel_labels),
+            length(scale_values) == length(scale_labels))
+
+  counts <- df %>%
+    select(all_of(channel_cols)) %>%
+    pivot_longer(everything(), names_to = "channel", values_to = "response") %>%
+    mutate(
+      channel  = factor(channel, levels = channel_cols, labels = channel_labels),
+      response = factor(response, levels = scale_values, labels = scale_labels)
+    ) %>%
+    filter(!is.na(response)) %>%                  # drops NAs and values outside 1-5
+    count(channel, response, .drop = FALSE) %>%   # keeps zero-count levels
+    group_by(channel) %>%
+    mutate(value = if (normalize) n / sum(n) else n) %>%
+    ungroup()
+
+  ggplot(counts, aes(x = response, y = value)) +
+    geom_col(color = "black", fill = "steelblue") +
+    facet_wrap(~ channel, ncol = ncols) +
+    labs(x = "Response", y = if (normalize) "Proportion" else "Count") +
+    theme_apa() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          strip.text = element_text(face = "bold"))
+}
+
+df <- completed
+channel_labels <- c("PBS", "Cartoon Network", "Nickelodeon",
+                    "Disney Channel", "YouTube", "Netflix")
+channel_cols <- c("channels_1", "channels_2", "channels_3",
+                  "channels_4", "channels_5", "channels_6")
+
+p <- plot_likert_histograms(df, channel_cols, channel_labels)
+p
+```
+
+## Childhood Problematic Media Usage
+
+```{r}
+plot_diverging_likert_median <- function(df, item_cols, item_labels = item_cols,
+                                         scale_values = 1:5,
+                                         scale_labels = c("Strongly disagree", "Disagree",
+                                                          "Neutral", "Agree", "Strongly agree"),
+                                         colors = c("#B2182B", "#EF8A62", "#BDBDBD",
+                                                    "#67A9CF", "#2166AC"),
+                                         sort_by_agree = TRUE) {
+
+  k <- length(scale_labels)
+  m <- ceiling(k / 2)   # middle category (3 on a 5-point scale)
+
+  stopifnot(length(item_cols) == length(item_labels),
+            length(scale_values) == k,
+            k %% 2 == 1,
+            length(colors) == k)
+
+  n_items <- length(item_cols)
+
+  pct <- df %>%
+    select(all_of(item_cols)) %>%
+    pivot_longer(everything(), names_to = "item", values_to = "response") %>%
+    mutate(
+      item     = factor(item, levels = item_cols, labels = item_labels),
+      response = factor(response, levels = scale_values, labels = scale_labels)
+    ) %>%
+    filter(!is.na(response)) %>%
+    count(item, response, .drop = FALSE) %>%
+    group_by(item) %>%
+    arrange(response, .by_group = TRUE) %>%
+    mutate(
+      pct       = 100 * n / sum(n),
+      cum_end   = cumsum(pct),
+      cum_start = cum_end - pct,
+      offset    = sum(pct[seq_len(m - 1)]) + pct[m] / 2,
+      xmin      = cum_start - offset,
+      xmax      = cum_end - offset,
+      xmid      = (xmin + xmax) / 2
+    ) %>%
+    ungroup()
+
+  # Item order: by % agree (highest at top) or by questionnaire order
+  if (sort_by_agree) {
+    item_order <- pct %>%
+      group_by(item) %>%
+      summarise(agree = sum(pct[as.integer(response) > m]), .groups = "drop") %>%
+      arrange(desc(agree)) %>%
+      pull(item) %>%
+      as.character()
+  } else {
+    item_order <- as.character(levels(pct$item))
+  }
+
+  pct <- pct %>%
+    mutate(y = n_items - match(as.character(item), item_order) + 1)
+
+  # Total % disagree / agree and bar end positions
+  ends <- pct %>%
+    group_by(item, y) %>%
+    summarise(disagree = sum(pct[as.integer(response) < m]),
+              agree    = sum(pct[as.integer(response) > m]),
+              left     = min(xmin),
+              right    = max(xmax),
+              .groups = "drop")
+
+  # Median category = first category where cumulative percent reaches 50
+  medians <- pct %>%
+    group_by(item, y) %>%
+    slice(which(cum_end >= 50 - 1e-9)[1]) %>%
+    ungroup()
+
+  ggplot() +
+    geom_rect(data = pct,
+              aes(xmin = xmin, xmax = xmax, ymin = y - 0.4, ymax = y + 0.4,
+                  fill = response)) +
+    geom_vline(xintercept = 0, color = "grey30",
+               linetype = "dashed", linewidth = 0.4) +
+    geom_point(data = medians, aes(x = xmid, y = y),
+               shape = 23, size = 4, fill = "white", color = "black", stroke = 1) +
+    geom_text(data = ends,
+              aes(x = left - 1, y = y, label = paste0(round(disagree), "%")),
+              hjust = 1, size = 3.5, color = "grey30") +
+    geom_text(data = ends,
+              aes(x = right + 1, y = y, label = paste0(round(agree), "%")),
+              hjust = 0, size = 3.5, color = "grey30") +
+    scale_fill_manual(values = setNames(colors, scale_labels),
+                      breaks = scale_labels, name = NULL) +
+    scale_x_continuous(expand = expansion(mult = 0.12)) +
+    scale_y_continuous(breaks = medians$y, labels = as.character(medians$item)) +
+    labs(x = NULL, y = NULL,
+         caption = paste0("Diamond = median response.\n",
+                          "Percentages at bar ends = total disagree (left) and ",
+                          "total agree (right); Neutral not included.")) +
+    theme_minimal() +
+    theme(legend.position = "bottom",
+          panel.grid.major.y = element_blank(),
+          panel.grid.minor.y = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.text.y = element_text(size = 10),
+          plot.caption = element_text(hjust = 0),
+          plot.caption.position = "plot")
+}
+
+p <- plot_diverging_likert_median(df, item_cols, item_labels)
+p
+```
+
