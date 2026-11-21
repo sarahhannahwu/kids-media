@@ -8,26 +8,30 @@ date: "`r Sys.Date()`"
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## 
+## Libraries
 ```{r}
 library(tidyverse)
 library(dplyr)
 library(jtools)
 library(qualtRics)
 library(rstatix)
+
+# Force R to reload the new credentials
+readRenviron("~/.Renviron")
+api_key <- Sys.getenv("QUALTRICS_API_KEY")
 ```
 
 ## Import Data
 
 ```{r}
 qualtrics_api_credentials(
+  api_key = api_key,
   base_url = "stanforduniversity.pdx1.qualtrics.com", 
   install = TRUE,
   overwrite = TRUE
 )
 
-# Force R to reload the new credentials
-readRenviron("~/.Renviron")
+
 
 kids_media_data <- fetch_survey(surveyID = "SV_81YtHzVK0gqgppk",
                               label = FALSE,
