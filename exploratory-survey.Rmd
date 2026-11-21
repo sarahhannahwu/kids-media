@@ -21,7 +21,6 @@ library(rstatix)
 
 ```{r}
 qualtrics_api_credentials(
-  api_key = "qKDWMNueoKPpjro1Dln0rjrlNfE7Dk0pw0S9OCZR",
   base_url = "stanforduniversity.pdx1.qualtrics.com", 
   install = TRUE,
   overwrite = TRUE
